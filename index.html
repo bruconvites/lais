@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Convite Real</title>
+<style>
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0;padding:0;width:100%;height:100%;
+    background:#04040a;
+    overflow:hidden;
+  }
+  #stage{
+    position:fixed;inset:0;
+    display:flex;align-items:center;justify-content:center;
+    background:#04040a;
+  }
+  #frame{
+    position:relative;
+    width:100%;height:100%;
+    max-width:562px; /* keeps 941:1672 ratio inside typical viewport */
+    aspect-ratio:941/1672;
+    overflow:hidden;
+    background:#000;
+    touch-action:none;
+    box-shadow:0 0 80px rgba(0,0,0,.8);
+  }
+  @media (min-height: 700px){
+    #frame{ height:min(100vh, 940px); width:auto; }
+  }
+  #frame img, #frame video, #frame canvas{
+    position:absolute;top:0;left:0;
+    width:100%;height:100%;
+    object-fit:cover;
+    display:block;
+  }
+  /* Alguns Android/Chrome renderizam <video> num overlay de hardware que ignora
+     opacity:1 e deixa o conteúdo de trás "vazar". Forçar uma opacidade
+     fracionária + camada composta própria evita esse bug. */
+  #frame video{
+    -webkit-transform:translateZ(0);
+    transform:translateZ(0);
+    -webkit-backface-visibility:hidden;
+    backface-visibility:hidden;
+    background:#000;
+  }
+
+  /* ---- Dome: drag wrapper (interaction) + image (fixed alignment) ---- */
+  #domeDrag{
+    position:absolute; inset:0;
+    cursor:grab;
+    touch-action:none;
+    will-change:transform,opacity;
+    filter:drop-shadow(0 30px 25px rgba(0,0,0,.35));
+    z-index:8;
+  }
+  #domeDrag.dragging{ cursor:grabbing; transition:none; }
+  #domeDrag.returning{ transition:transform .5s cubic-bezier(.34,1.56,.64,1); }
+  #domeDrag.removed{ transition:transform 1s cubic-bezier(.5,0,.75,0), opacity 1s ease; }
+
+  #dome{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover;
+    /* encaixa o vidro exatamente em volta da rosa/base da nova primeira.jpg */
+    transform-origin: 50.05% 68.81%;
+    transform: translate(0.159%, -0.449%) scale(1.031, 0.9618);
+  }
+
+  #resultLayer{
+    position:absolute; inset:0; z-index:10;
+    opacity:0; pointer-events:none;
+    transition:opacity .6s ease;
+  }
+  #resultLayer.show{ opacity:0.999; }
+
+  #particleCanvas{ pointer-events:none; z-index:5; }
+
+  #hint{
+    position:absolute; left:0; right:0; bottom:8%;
+    text-align:center; color:#f5e6c8;
+    font-family:Georgia,'Times New Roman',serif;
+    font-size:clamp(14px,3.6vw,18px);
+    letter-spacing:.06em;
+    text-shadow:0 2px 10px rgba(0,0,0,.8);
+    opacity:0; animation:hintFade 1.5s ease .8s forwards;
+    z-index:9; pointer-events:none;
+  }
+  #hint .arrow{ display:block; font-size:1.4em; animation:bob 1.6s ease-in-out infinite; }
+  @keyframes hintFade{ to{opacity:.92;} }
+  @keyframes bob{ 0%,100%{transform:translateY(0);} 50%{transform:translateY(-8px);} }
+  #hint.hide{ opacity:0!important; transition:opacity .4s ease; }
+
+  #videoLayer{
+    position:absolute; inset:0; z-index:20;
+    opacity:0; pointer-events:none;
+    transition:opacity .6s ease;
+  }
+  #videoLayer.show{ opacity:0.999; pointer-events:auto; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="frame">
+    <img id="sceneBg" src="primeira.jpg" alt="">
+    <div id="resultLayer"><video id="sceneResultVideo" src="resultadodeflorecer.mp4" playsinline></video></div>
+    <canvas id="particleCanvas"></canvas>
+    <div id="domeDrag">
+      <img id="dome" src="sobreposicaoprimeira.jpg" alt="">
+    </div>
+    <div id="hint"><span class="arrow">☝</span>Arraste a redoma para cima</div>
+    <div id="videoLayer"><video id="convite" src="convite.mp4" playsinline></video></div>
+  </div>
+</div>
+
+<script>
+const domeDrag = document.getElementById('domeDrag');
+const hint = document.getElementById('hint');
+const frame = document.getElementById('frame');
+const sceneResultVideo = document.getElementById('sceneResultVideo');
+const resultLayer = document.getElementById('resultLayer');
+const canvas = document.getElementById('particleCanvas');
+const ctx = canvas.getContext('2d');
+const videoLayer = document.getElementById('videoLayer');
+const conviteVideo = document.getElementById('convite');
+
+let dragging=false, startY=0, currentDelta=0, removed=false;
+
+function resizeCanvas(){
+  const r = frame.getBoundingClientRect();
+  canvas.width = r.width; canvas.height = r.height;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ---- Drag interaction ----
+domeDrag.addEventListener('pointerdown', (e)=>{
+  if(removed) return;
+  dragging = true;
+  startY = e.clientY;
+  domeDrag.classList.remove('returning');
+  domeDrag.classList.add('dragging');
+  domeDrag.setPointerCapture(e.pointerId);
+  hint.classList.add('hide');
+  startParticles(); // smoke begins rising as soon as the person starts pulling the dome
+});
+
+domeDrag.addEventListener('pointermove', (e)=>{
+  if(!dragging) return;
+  let dy = startY - e.clientY;
+  if(dy < 0) dy = 0;
+  currentDelta = dy;
+  const fade = Math.max(0, 1 - dy/420);
+  domeDrag.style.transform = `translateY(${-dy}px) rotate(${-dy*0.02}deg)`;
+  domeDrag.style.opacity = fade;
+});
+
+function endDrag(e){
+  if(!dragging) return;
+  dragging = false;
+  domeDrag.classList.remove('dragging');
+  if(currentDelta > 140){
+    liftDomeAway();
+  } else {
+    domeDrag.classList.add('returning');
+    domeDrag.style.transform = 'translateY(0) rotate(0deg)';
+    domeDrag.style.opacity = 1;
+    hint.classList.remove('hide');
+    stopParticles(); // dome went back down, smoke fades out immediately
+  }
+  currentDelta = 0;
+}
+domeDrag.addEventListener('pointerup', endDrag);
+domeDrag.addEventListener('pointercancel', endDrag);
+
+// ---- Sequence after dome is lifted ----
+function liftDomeAway(){
+  removed = true;
+  domeDrag.classList.add('removed');
+  domeDrag.style.transform = 'translateY(-1300px) rotate(-8deg)';
+  domeDrag.style.opacity = '0';
+
+  // let the smoke finish its rise, then the flowering video starts on its own
+  const elapsed = performance.now() - particleStart;
+  const wait = Math.max(300, (PARTICLE_DURATION - elapsed) + 300);
+  setTimeout(startResultVideo, wait);
+}
+
+function startResultVideo(){
+  resultLayer.classList.add('show');
+  sceneResultVideo.currentTime = 0;
+  sceneResultVideo.muted = false;
+  const p = sceneResultVideo.play();
+  if(p) p.catch(()=>{ sceneResultVideo.muted = true; sceneResultVideo.play(); });
+
+  sceneResultVideo.onended = ()=>{
+    startConvite();
+  };
+}
+
+function startConvite(){
+  videoLayer.classList.add('show');
+  conviteVideo.currentTime = 0;
+  conviteVideo.muted = false;
+  const p = conviteVideo.play();
+  if(p) p.catch(()=>{ conviteVideo.muted = true; conviteVideo.play(); });
+
+  conviteVideo.onended = ()=>{
+    resultLayer.classList.remove('show');
+  };
+}
+
+// ---- Particle system: red smoke + gold glitter (dome lift) ----
+let particles = [];
+let particleAnimId = null;
+let particleStart = 0;
+const PARTICLE_DURATION = 3200;
+
+function startParticles(){
+  particles = [];
+  const r = frame.getBoundingClientRect();
+  const originX = r.width * 0.505;
+  const originY = r.height * 0.66;
+
+  for(let i=0;i<38;i++){
+    particles.push(makeSmoke(originX, originY));
+  }
+  for(let i=0;i<70;i++){
+    particles.push(makeGlitter(originX, originY));
+  }
+  particleStart = performance.now();
+  if(particleAnimId) cancelAnimationFrame(particleAnimId);
+  animateParticles();
+}
+
+function stopParticles(){
+  if(particleAnimId) cancelAnimationFrame(particleAnimId);
+  particleAnimId = null;
+  particles = [];
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+}
+
+function makeSmoke(ox,oy){
+  const angle = Math.random()*Math.PI*2;
+  const radius = 10 + Math.random()*40;
+  return{
+    type:'smoke',
+    x: ox + Math.cos(angle)*radius,
+    y: oy + Math.sin(angle)*radius*0.4,
+    baseX: ox, baseY: oy,
+    angle: angle,
+    orbit: 30 + Math.random()*70,
+    speed: 0.02 + Math.random()*0.02,
+    rise: 0.35 + Math.random()*0.55,
+    size: 18 + Math.random()*46,
+    delay: Math.random()*400,
+    alpha: 0
+  };
+}
+function makeGlitter(ox,oy){
+  const angle = Math.random()*Math.PI*2;
+  const radius = 5 + Math.random()*60;
+  return{
+    type:'glitter',
+    x: ox + Math.cos(angle)*radius,
+    y: oy + Math.sin(angle)*radius*0.4,
+    baseX: ox, baseY: oy,
+    angle: angle,
+    orbit: 20 + Math.random()*90,
+    speed: 0.035 + Math.random()*0.035,
+    rise: 0.5 + Math.random()*0.9,
+    size: 1.4 + Math.random()*2.6,
+    twinkle: Math.random()*Math.PI*2,
+    delay: Math.random()*600,
+    alpha: 0
+  };
+}
+
+function animateParticles(){
+  const now = performance.now();
+  const elapsed = now - particleStart;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  particles.forEach(p=>{
+    const t = elapsed - p.delay;
+    if(t < 0) return;
+    p.angle += p.speed;
+    const life = t/PARTICLE_DURATION;
+    const riseAmt = t * p.rise * 0.55;
+    const cx = p.baseX + Math.cos(p.angle)*p.orbit*(1-life*0.4);
+    const cy = p.baseY + Math.sin(p.angle)*p.orbit*0.5*(1-life*0.4) - riseAmt;
+
+    let alpha;
+    if(life < 0.15) alpha = life/0.15;
+    else if(life > 0.7) alpha = Math.max(0, 1-(life-0.7)/0.3);
+    else alpha = 1;
+
+    if(p.type==='smoke'){
+      const grad = ctx.createRadialGradient(cx,cy,0,cx,cy,p.size);
+      grad.addColorStop(0, `rgba(180,10,20,${0.45*alpha})`);
+      grad.addColorStop(0.5, `rgba(120,5,15,${0.28*alpha})`);
+      grad.addColorStop(1, `rgba(80,0,10,0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx,cy,p.size,0,Math.PI*2);
+      ctx.fill();
+    } else {
+      const tw = 0.5 + 0.5*Math.sin(elapsed*0.01 + p.twinkle);
+      ctx.fillStyle = `rgba(255,${205+Math.floor(30*tw)},${120+Math.floor(60*tw)},${alpha*tw})`;
+      ctx.beginPath();
+      ctx.arc(cx,cy,p.size*(0.7+0.6*tw),0,Math.PI*2);
+      ctx.fill();
+      ctx.shadowColor = 'rgba(255,215,140,0.9)';
+      ctx.shadowBlur = 6;
+    }
+    ctx.shadowBlur = 0;
+  });
+
+  if(elapsed < PARTICLE_DURATION + 800){
+    particleAnimId = requestAnimationFrame(animateParticles);
+  } else {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+  }
+}
+</script>
+</body>
+</html>
